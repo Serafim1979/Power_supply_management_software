@@ -5,13 +5,17 @@
 
 // Глобальные переменные
 const char g_szClassName[] = "MainWindowClass";
-HWND hComboBoxPort, hComboBoxBaudRate, hButtonConnect, hLED;
+HWND hComboBoxPort, hComboBoxBaudRate, hComboBoxByteSize, hComboBoxParity, hComboBoxStopBits, hButtonConnect, hLED;
 HINSTANCE g_hInst;
+HANDLE hComPort = INVALID_HANDLE_VALUE; // Дескриптор COM-порта
 
 // Прототипы функций
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 void PopulateCOMPorts();
 void PopulateBaudRates();
+void PopulateByteSizes();
+void PopulateParities();
+void PopulateStopBits();
 void UpdateLED(int status);
 
 // Функции для работы с COM-портом
@@ -109,15 +113,33 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 50, 100, 150, 200, hwnd, NULL, g_hInst, NULL);
             PopulateBaudRates();
 
+            // Создание ComboBox для выбора размера байта
+            hComboBoxByteSize = CreateWindow("COMBOBOX", NULL,
+                CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_OVERLAPPED | WS_VISIBLE,
+                50, 150, 150, 200, hwnd, NULL, g_hInst, NULL);
+            PopulateByteSizes();
+
+            // Создание ComboBox для выбора проверки четности
+            hComboBoxParity = CreateWindow("COMBOBOX", NULL,
+                CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_OVERLAPPED | WS_VISIBLE,
+                50, 200, 150, 200, hwnd, NULL, g_hInst, NULL);
+            PopulateParities();
+
+            // Создание ComboBox для выбора стоп-битов
+            hComboBoxStopBits = CreateWindow("COMBOBOX", NULL,
+                CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_OVERLAPPED | WS_VISIBLE,
+                50, 250, 150, 200, hwnd, NULL, g_hInst, NULL);
+            PopulateStopBits();
+
             // Создание кнопки Connect
             hButtonConnect = CreateWindow("BUTTON", "Connect",
                 WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-                50, 150, 100, 30, hwnd, (HMENU)1, g_hInst, NULL);
+                50, 300, 100, 30, hwnd, (HMENU)1, g_hInst, NULL);
 
             // Создание светодиода для индикации состояния
             hLED = CreateWindow("STATIC", NULL,
                 WS_CHILD | WS_VISIBLE | SS_CENTER,
-                160, 150, 20, 20, hwnd, NULL, g_hInst, NULL);
+                160, 300, 20, 20, hwnd, NULL, g_hInst, NULL);
             UpdateLED(0); // Нейтральное состояние (серый)
             break;
 
@@ -126,11 +148,35 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 char portName[10];
                 GetWindowText(hComboBoxPort, portName, 10);
 
+                // Проверка, был ли выбран COM-порт
+                if (strlen(portName) == 0) {
+                    MessageBox(hwnd, "Please select a COM port.", "Error", MB_OK | MB_ICONERROR);
+                    UpdateLED(2); // Неудача (красный)
+                    return 0;
+                }
+
                 char baudRateStr[10];
                 GetWindowText(hComboBoxBaudRate, baudRateStr, 10);
                 int baudRate = atoi(baudRateStr);
 
-                if(OpenCOMPort(portName) && ConfigureCOMPort(baudRate, 8, NOPARITY, ONESTOPBIT)) {
+                char byteSizeStr[10];
+                GetWindowText(hComboBoxByteSize, byteSizeStr, 10);
+                int byteSize = atoi(byteSizeStr);
+
+                char parityStr[10];
+                GetWindowText(hComboBoxParity, parityStr, 10);
+                int parity = atoi(parityStr);
+
+                char stopBitsStr[10];
+                GetWindowText(hComboBoxStopBits, stopBitsStr, 10);
+                int stopBits = atoi(stopBitsStr);
+
+                // Попробовать открыть и настроить COM-порт
+                bool portOpen = OpenCOMPort(portName);
+                bool portConfigured = ConfigureCOMPort(baudRate, byteSize, parity, stopBits);
+
+                // Если порт успешно открыт и настроен, диод будет зеленым, иначе красным
+                if (portOpen && portConfigured) {
                     UpdateLED(1); // Успех (зеленый)
                 } else {
                     UpdateLED(2); // Неудача (красный)
@@ -139,6 +185,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             break;
 
         case WM_CLOSE:
+            // Закрыть COM-порт при завершении работы
+            if (hComPort != INVALID_HANDLE_VALUE) {
+                CloseHandle(hComPort);
+            }
             DestroyWindow(hwnd);
             break;
         case WM_DESTROY:
@@ -151,20 +201,98 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 }
 
 
-// Функции для работы с COM-портом
+
+// Функции для работы с COM-портом (заглушки)
 bool OpenCOMPort(const char* portName) {
-    std::cout << "OpenCOMPort" << std::endl;
+    // Закрыть старое соединение, если оно есть
+    if (hComPort != INVALID_HANDLE_VALUE) {
+        CloseHandle(hComPort);
+    }
+
+    // Открыть новый COM-порт
+    hComPort = CreateFile(
+        portName,
+        GENERIC_READ | GENERIC_WRITE,
+        0,              // No sharing
+        NULL,           // No security attributes
+        OPEN_EXISTING,  // Open existing port
+        0,              // No overlapped I/O
+        NULL            // No template file
+    );
+
+    if (hComPort == INVALID_HANDLE_VALUE) {
+        std::cerr << "Failed to open COM port: " << GetLastError() << std::endl;
+        return false;
+    }
+
     return true;
 }
+
 
 void CloseCOMPort() {
     std::cout << "CloseCOMPort" << std::endl;
 }
 
+void PopulateByteSizes() {
+    std::vector<std::string> byteSizes = {"5", "6", "7", "8"};
+    for (const std::string& size : byteSizes) {
+        SendMessage(hComboBoxByteSize, CB_ADDSTRING, 0, (LPARAM)size.c_str());
+    }
+    SendMessage(hComboBoxByteSize, CB_SETCURSEL, 3, 0); // Устанавливаем 8 бит как значение по умолчанию
+}
+
+void PopulateParities() {
+    std::vector<std::string> parities = {"None", "Odd", "Even", "Mark", "Space"};
+    for (const std::string& parity : parities) {
+        SendMessage(hComboBoxParity, CB_ADDSTRING, 0, (LPARAM)parity.c_str());
+    }
+    SendMessage(hComboBoxParity, CB_SETCURSEL, 0, 0); // Устанавливаем None как значение по умолчанию
+}
+void PopulateStopBits() {
+    std::vector<std::string> stopBits = {"1", "1.5", "2"};
+    for (const std::string& bits : stopBits) {
+        SendMessage(hComboBoxStopBits, CB_ADDSTRING, 0, (LPARAM)bits.c_str());
+    }
+    SendMessage(hComboBoxStopBits, CB_SETCURSEL, 0, 0); // Устанавливаем 1 как значение по умолчанию
+}
+
 bool ConfigureCOMPort(int baudRate, int byteSize, int parity, int stopBits) {
-    std::cout << "ConfigureCOMPort" << std::endl;
+    DCB dcbSerialParams = {0};
+
+    // Получить текущие параметры порта
+    if (!GetCommState(hComPort, &dcbSerialParams)) {
+        std::cerr << "Failed to get COM port state: " << GetLastError() << std::endl;
+        return false;
+    }
+
+    // Настроить параметры порта
+    dcbSerialParams.BaudRate = baudRate;
+    dcbSerialParams.ByteSize = byteSize;
+    dcbSerialParams.Parity = parity;
+    dcbSerialParams.StopBits = stopBits;
+
+    // Установить параметры порта
+    if (!SetCommState(hComPort, &dcbSerialParams)) {
+        std::cerr << "Failed to set COM port state: " << GetLastError() << std::endl;
+        return false;
+    }
+
+    // Настроить таймауты (по умолчанию)
+    COMMTIMEOUTS timeouts = {0};
+    timeouts.ReadIntervalTimeout = 50;
+    timeouts.ReadTotalTimeoutConstant = 50;
+    timeouts.ReadTotalTimeoutMultiplier = 10;
+    timeouts.WriteTotalTimeoutConstant = 50;
+    timeouts.WriteTotalTimeoutMultiplier = 10;
+
+    if (!SetCommTimeouts(hComPort, &timeouts)) {
+        std::cerr << "Failed to set COM port timeouts: " << GetLastError() << std::endl;
+        return false;
+    }
+
     return true;
 }
+
 
 bool WriteToCOMPort(const char* command) {
     std::cout << "WriteToCOMPort" << std::endl;
@@ -176,6 +304,8 @@ bool ReadFromCOMPort(char* buffer, int bufferSize) {
     return true;
 }
 
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
 // Функции для управления источником питания
 bool SetVoltage(double voltage) {
     std::cout << "SetVoltage" << std::endl;
@@ -277,21 +407,46 @@ void UpdateLED(int status) {
     ReleaseDC(hwndLED, hdc);
 }
 
+// Функции для заполнения ComboBox
+
 void PopulateCOMPorts() {
-    // Заглушка для заполнения списка COM-портов
-    SendMessage(hComboBoxPort, CB_ADDSTRING, 0, (LPARAM)"COM1");
-    SendMessage(hComboBoxPort, CB_ADDSTRING, 0, (LPARAM)"COM2");
-    SendMessage(hComboBoxPort, CB_ADDSTRING, 0, (LPARAM)"COM3");
-    SendMessage(hComboBoxPort, CB_ADDSTRING, 0, (LPARAM)"COM4");
+    for (int i = 1; i <= 256; i++) {
+        char portName[10];
+        snprintf(portName, sizeof(portName), "COM%d", i);
+
+        HANDLE hCOM = CreateFile(portName, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+        if (hCOM != INVALID_HANDLE_VALUE) {
+            CloseHandle(hCOM);
+            SendMessage(hComboBoxPort, CB_ADDSTRING, 0, (LPARAM)portName);
+        }
+    }
+//    HKEY hKey;
+//    if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, "HARDWARE\\DEVICEMAP\\SERIALCOMM", 0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+//        char valueName[256];
+//        BYTE valueData[256];
+//        DWORD valueNameSize, valueDataSize, type, index = 0;
+//
+//        while (true) {
+//            valueNameSize = sizeof(valueName);
+//            valueDataSize = sizeof(valueData);
+//            if (RegEnumValue(hKey, index, valueName, &valueNameSize, NULL, &type, valueData, &valueDataSize) != ERROR_SUCCESS) {
+//                break;
+//            }
+//            if (type == REG_SZ) {
+//                SendMessage(hComboBoxPort, CB_ADDSTRING, 0, (LPARAM)valueData);
+//            }
+//            index++;
+//        }
+//        RegCloseKey(hKey);
+//    }
 }
 
 void PopulateBaudRates() {
-    // Заполнение списка скоростей передачи данных
-    SendMessage(hComboBoxBaudRate, CB_ADDSTRING, 0, (LPARAM)"9600");
-    SendMessage(hComboBoxBaudRate, CB_ADDSTRING, 0, (LPARAM)"19200");
-    SendMessage(hComboBoxBaudRate, CB_ADDSTRING, 0, (LPARAM)"38400");
-    SendMessage(hComboBoxBaudRate, CB_ADDSTRING, 0, (LPARAM)"57600");
-    SendMessage(hComboBoxBaudRate, CB_ADDSTRING, 0, (LPARAM)"115200");
+     // Заполнение списка скоростей передачи данных
+    std::vector<std::string> baudRates = {"9600", "19200", "38400", "57600", "115200"};
+    for (const std::string& rate : baudRates) {
+        SendMessage(hComboBoxBaudRate, CB_ADDSTRING, 0, (LPARAM)rate.c_str());
+    }
 
     // Установка значения по умолчанию
     SendMessage(hComboBoxBaudRate, CB_SETCURSEL, 0, 0);
