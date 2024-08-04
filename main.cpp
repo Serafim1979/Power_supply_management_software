@@ -354,7 +354,25 @@ bool SaveSettings(int memoryBank) {
 
 // Функции для чтения и регистрации значений
 bool GetVoltage(double& voltage) {
-    std::cout << "GetVoltage" << std::endl;
+    if (hComPort == INVALID_HANDLE_VALUE) {
+        std::cerr << "COM port not open." << std::endl;
+        return false;
+    }
+
+    // Отправка команды для получения значения напряжения
+    const char* command = "MEAS:VOLT?";
+    if (!WriteToCOMPort(command)) {
+        return false;
+    }
+
+    // Чтение ответа
+    char buffer[256];
+    if (!ReadFromCOMPort(buffer, sizeof(buffer))) {
+        return false;
+    }
+
+    // Парсинг ответа
+    voltage = atof(buffer);
     return true;
 }
 
