@@ -1,11 +1,18 @@
 #include <windows.h>
 #include <iostream>
+#include <vector>
+#include <string>
 
 // Глобальные переменные
 const char g_szClassName[] = "MainWindowClass";
+HWND hComboBoxPort, hComboBoxBaudRate, hButtonConnect, hLED;
+HINSTANCE g_hInst;
 
 // Прототипы функций
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
+void PopulateCOMPorts();
+void PopulateBaudRates();
+void UpdateLED(int status);
 
 // Функции для работы с COM-портом
 bool OpenCOMPort(const char* portName);
@@ -89,6 +96,48 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch(msg) {
+        case WM_CREATE:
+            // Создание ComboBox для выбора COM-порта
+            hComboBoxPort = CreateWindow("COMBOBOX", NULL,
+                CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_OVERLAPPED | WS_VISIBLE,
+                50, 50, 150, 200, hwnd, NULL, g_hInst, NULL);
+            PopulateCOMPorts();
+
+            // Создание ComboBox для выбора скорости передачи данных
+            hComboBoxBaudRate = CreateWindow("COMBOBOX", NULL,
+                CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_OVERLAPPED | WS_VISIBLE,
+                50, 100, 150, 200, hwnd, NULL, g_hInst, NULL);
+            PopulateBaudRates();
+
+            // Создание кнопки Connect
+            hButtonConnect = CreateWindow("BUTTON", "Connect",
+                WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
+                50, 150, 100, 30, hwnd, (HMENU)1, g_hInst, NULL);
+
+            // Создание светодиода для индикации состояния
+            hLED = CreateWindow("STATIC", NULL,
+                WS_CHILD | WS_VISIBLE | SS_CENTER,
+                160, 150, 20, 20, hwnd, NULL, g_hInst, NULL);
+            UpdateLED(0); // Нейтральное состояние (серый)
+            break;
+
+        case WM_COMMAND:
+            if(LOWORD(wParam) == 1) { // Нажата кнопка Connect
+                char portName[10];
+                GetWindowText(hComboBoxPort, portName, 10);
+
+                char baudRateStr[10];
+                GetWindowText(hComboBoxBaudRate, baudRateStr, 10);
+                int baudRate = atoi(baudRateStr);
+
+                if(OpenCOMPort(portName) && ConfigureCOMPort(baudRate, 8, NOPARITY, ONESTOPBIT)) {
+                    UpdateLED(1); // Успех (зеленый)
+                } else {
+                    UpdateLED(2); // Неудача (красный)
+                }
+            }
+            break;
+
         case WM_CLOSE:
             DestroyWindow(hwnd);
             break;
@@ -201,7 +250,50 @@ void VisualizeCurrent() {
     std::cout << "VisualizeCurrent" << std::endl;
 }
 
-void UpdateLED(int ledID, int status) {
-    std::cout << "UpdateLED" << std::endl;
+void UpdateLED(int status) {
+    HWND hwndLED = hLED;
+    HDC hdc = GetDC(hwndLED);
+    HBRUSH hBrush;
+
+    switch(status) {
+        case 0: // Нейтральное состояние (серый)
+            hBrush = CreateSolidBrush(RGB(128, 128, 128));
+            break;
+        case 1: // Успех (зеленый)
+            hBrush = CreateSolidBrush(RGB(0, 255, 0));
+            break;
+        case 2: // Неудача (красный)
+            hBrush = CreateSolidBrush(RGB(255, 0, 0));
+            break;
+        default:
+            hBrush = CreateSolidBrush(RGB(128, 128, 128));
+            break;
+    }
+
+    RECT rect;
+    GetClientRect(hwndLED, &rect);
+    FillRect(hdc, &rect, hBrush);
+    DeleteObject(hBrush);
+    ReleaseDC(hwndLED, hdc);
+}
+
+void PopulateCOMPorts() {
+    // Заглушка для заполнения списка COM-портов
+    SendMessage(hComboBoxPort, CB_ADDSTRING, 0, (LPARAM)"COM1");
+    SendMessage(hComboBoxPort, CB_ADDSTRING, 0, (LPARAM)"COM2");
+    SendMessage(hComboBoxPort, CB_ADDSTRING, 0, (LPARAM)"COM3");
+    SendMessage(hComboBoxPort, CB_ADDSTRING, 0, (LPARAM)"COM4");
+}
+
+void PopulateBaudRates() {
+    // Заполнение списка скоростей передачи данных
+    SendMessage(hComboBoxBaudRate, CB_ADDSTRING, 0, (LPARAM)"9600");
+    SendMessage(hComboBoxBaudRate, CB_ADDSTRING, 0, (LPARAM)"19200");
+    SendMessage(hComboBoxBaudRate, CB_ADDSTRING, 0, (LPARAM)"38400");
+    SendMessage(hComboBoxBaudRate, CB_ADDSTRING, 0, (LPARAM)"57600");
+    SendMessage(hComboBoxBaudRate, CB_ADDSTRING, 0, (LPARAM)"115200");
+
+    // Установка значения по умолчанию
+    SendMessage(hComboBoxBaudRate, CB_SETCURSEL, 0, 0);
 }
 
