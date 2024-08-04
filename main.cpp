@@ -9,6 +9,11 @@ HWND hComboBoxPort, hComboBoxBaudRate, hComboBoxByteSize, hComboBoxParity, hComb
 HINSTANCE g_hInst;
 HANDLE hComPort = INVALID_HANDLE_VALUE; // Дескриптор COM-порта
 
+HWND hStaticVoltage, hStaticCurrent, hStaticMaxVoltage, hStaticMaxCurrent;
+
+double maxVoltage = 0.0;
+double maxCurrent = 0.0;
+
 // Прототипы функций
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 void PopulateCOMPorts();
@@ -141,48 +146,84 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 WS_CHILD | WS_VISIBLE | SS_CENTER,
                 160, 300, 20, 20, hwnd, NULL, g_hInst, NULL);
             UpdateLED(0); // Нейтральное состояние (серый)
+
+            // В функции WM_CREATE добавьте создание статических текстов для отображения значений
+hStaticVoltage = CreateWindow("STATIC", "Voltage: 0.0 V",
+    WS_CHILD | WS_VISIBLE | SS_CENTER,
+    250, 50, 150, 20, hwnd, NULL, g_hInst, NULL);
+
+hStaticCurrent = CreateWindow("STATIC", "Current: 0.0 A",
+    WS_CHILD | WS_VISIBLE | SS_CENTER,
+    250, 100, 150, 20, hwnd, NULL, g_hInst, NULL);
+
+hStaticMaxVoltage = CreateWindow("STATIC", "Max Voltage: 0.0 V",
+    WS_CHILD | WS_VISIBLE | SS_CENTER,
+    250, 150, 150, 20, hwnd, NULL, g_hInst, NULL);
+
+hStaticMaxCurrent = CreateWindow("STATIC", "Max Current: 0.0 A",
+    WS_CHILD | WS_VISIBLE | SS_CENTER,
+    250, 200, 150, 20, hwnd, NULL, g_hInst, NULL);
             break;
 
         case WM_COMMAND:
-            if(LOWORD(wParam) == 1) { // Нажата кнопка Connect
-                char portName[10];
-                GetWindowText(hComboBoxPort, portName, 10);
+    if(LOWORD(wParam) == 1) { // Нажата кнопка Connect
+        char portName[10];
+        GetWindowText(hComboBoxPort, portName, 10);
 
-                // Проверка, был ли выбран COM-порт
-                if (strlen(portName) == 0) {
-                    MessageBox(hwnd, "Please select a COM port.", "Error", MB_OK | MB_ICONERROR);
-                    UpdateLED(2); // Неудача (красный)
-                    return 0;
-                }
+        // Проверка, был ли выбран COM-порт
+        if (strlen(portName) == 0) {
+            MessageBox(hwnd, "Please select a COM port.", "Error", MB_OK | MB_ICONERROR);
+            UpdateLED(2); // Неудача (красный)
+            return 0;
+        }
 
-                char baudRateStr[10];
-                GetWindowText(hComboBoxBaudRate, baudRateStr, 10);
-                int baudRate = atoi(baudRateStr);
+        char baudRateStr[10];
+        GetWindowText(hComboBoxBaudRate, baudRateStr, 10);
+        int baudRate = atoi(baudRateStr);
 
-                char byteSizeStr[10];
-                GetWindowText(hComboBoxByteSize, byteSizeStr, 10);
-                int byteSize = atoi(byteSizeStr);
+        char byteSizeStr[10];
+        GetWindowText(hComboBoxByteSize, byteSizeStr, 10);
+        int byteSize = atoi(byteSizeStr);
 
-                char parityStr[10];
-                GetWindowText(hComboBoxParity, parityStr, 10);
-                int parity = atoi(parityStr);
+        char parityStr[10];
+        GetWindowText(hComboBoxParity, parityStr, 10);
+        int parity = atoi(parityStr);
 
-                char stopBitsStr[10];
-                GetWindowText(hComboBoxStopBits, stopBitsStr, 10);
-                int stopBits = atoi(stopBitsStr);
+        char stopBitsStr[10];
+        GetWindowText(hComboBoxStopBits, stopBitsStr, 10);
+        int stopBits = atoi(stopBitsStr);
 
-                // Попробовать открыть и настроить COM-порт
-                bool portOpen = OpenCOMPort(portName);
-                bool portConfigured = ConfigureCOMPort(baudRate, byteSize, parity, stopBits);
+        // Попробовать открыть и настроить COM-порт
+        bool portOpen = OpenCOMPort(portName);
+        bool portConfigured = ConfigureCOMPort(baudRate, byteSize, parity, stopBits);
 
-                // Если порт успешно открыт и настроен, диод будет зеленым, иначе красным
-                if (portOpen && portConfigured) {
-                    UpdateLED(1); // Успех (зеленый)
-                } else {
-                    UpdateLED(2); // Неудача (красный)
-                }
+        if (portOpen && portConfigured) {
+            UpdateLED(1); // Успех (зеленый)
+
+            // Получение текущих значений
+            double voltage = 0.0, current = 0.0;
+            if (GetVoltage(voltage) && GetCurrent(current)) {
+                RegisterMinMaxValues(voltage, current);
+
+                // Обновление GUI с текущими значениями
+                char buffer[50];
+                snprintf(buffer, sizeof(buffer), "Voltage: %.2f V", voltage);
+                SetWindowText(hStaticVoltage, buffer);
+                snprintf(buffer, sizeof(buffer), "Current: %.2f A", current);
+                SetWindowText(hStaticCurrent, buffer);
+
+                snprintf(buffer, sizeof(buffer), "Max Voltage: %.2f V", maxVoltage);
+                SetWindowText(hStaticMaxVoltage, buffer);
+                snprintf(buffer, sizeof(buffer), "Max Current: %.2f A", maxCurrent);
+                SetWindowText(hStaticMaxCurrent, buffer);
+            } else {
+                UpdateLED(2); // Неудача (красный)
             }
-            break;
+        } else {
+            UpdateLED(2); // Неудача (красный)
+        }
+    }
+    break;
 
         case WM_CLOSE:
             // Закрыть COM-порт при завершении работы
@@ -400,7 +441,19 @@ bool GetCurrent(double& current) {
 }
 
 void RegisterMinMaxValues(double voltage, double current) {
-    std::cout << "RegisterMinMaxValues" << std::endl;
+    static double maxVoltage = 0;
+    static double maxCurrent = 0;
+
+    if (voltage > maxVoltage) {
+        maxVoltage = voltage;
+    }
+
+    if (current > maxCurrent) {
+        maxCurrent = current;
+    }
+
+    // Обновить GUI с максимальными значениями
+    // Например, с помощью функций UpdateGUIWithMaxValues(maxVoltage, maxCurrent)
 }
 
 // Функции для графического интерфейса
