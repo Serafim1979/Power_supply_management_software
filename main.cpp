@@ -377,7 +377,25 @@ bool GetVoltage(double& voltage) {
 }
 
 bool GetCurrent(double& current) {
-    std::cout << "GetCurrent" << std::endl;
+    if (hComPort == INVALID_HANDLE_VALUE) {
+        std::cerr << "COM port not open." << std::endl;
+        return false;
+    }
+
+    // Отправка команды для получения значения тока
+    const char* command = "MEAS:CURR?";
+    if (!WriteToCOMPort(command)) {
+        return false;
+    }
+
+    // Чтение ответа
+    char buffer[256];
+    if (!ReadFromCOMPort(buffer, sizeof(buffer))) {
+        return false;
+    }
+
+    // Парсинг ответа
+    current = atof(buffer);
     return true;
 }
 
