@@ -34,7 +34,7 @@ void checkError() {
 //////////////////////////////////////////////////////////////////////////////////////////////////////
 
 void StartPollingTimer(HWND hwnd, int ID_TIMER) {
-    SetTimer(hwnd, ID_TIMER, 500, NULL);  // Устанавливаем таймер с интервалом 1 секунда
+    SetTimer(hwnd, ID_TIMER, 500, NULL);  // Setting a timer with an interval of 1 second
 }
 
 void StopPollingTimer(HWND hwnd, int ID_TIMER) {
@@ -43,22 +43,22 @@ void StopPollingTimer(HWND hwnd, int ID_TIMER) {
 
 
 void UpdateVoltageDisplay(HWND hwnd, int ID_VOLTAGE_DISPLAY, const std::string& voltage) {
-    std::string displayText = "Actual Voltage: " + voltage;// + "V";
+    std::string displayText = "Actual Voltage: " + voltage;
     SetWindowText(GetDlgItem(hwnd, ID_VOLTAGE_DISPLAY), displayText.c_str());
 }
 
 void UpdateCurrentDisplay(HWND hwnd, int ID_CURRENT_DISPLAY, const std::string& current) {
-    std::string displayText = "Actual Current: " + current; // + "A";
+    std::string displayText = "Actual Current: " + current;
     SetWindowText(GetDlgItem(hwnd, ID_CURRENT_DISPLAY), displayText.c_str());
 }
 
 void UpdateMaxVoltageDisplay(HWND hwnd, int ID_MAX_VOLTAGE_DISPLAY, const std::string& voltage) {
-    std::string displayText = "Max Voltage: " + voltage;// + "V";
+    std::string displayText = "Max Voltage: " + voltage;
     SetWindowText(GetDlgItem(hwnd, ID_MAX_VOLTAGE_DISPLAY), displayText.c_str());
 }
 
 void UpdateMaxCurrentDisplay(HWND hwnd, int ID_MAX_CURRENT_DISPLAY, const std::string& current) {
-    std::string displayText = "Max Current: " + current; // + "A";
+    std::string displayText = "Max Current: " + current;
     SetWindowText(GetDlgItem(hwnd, ID_MAX_CURRENT_DISPLAY), displayText.c_str());
 }
 
@@ -76,15 +76,15 @@ std::string SendSCPICommandAndGetResponse(HANDLE hComPort, const std::string& co
     DWORD bytesWritten;
     WriteFile(hComPort, command.c_str(), command.length(), &bytesWritten, NULL);
 
-    // Отправляем команду завершения строки (например, \n)
+    // Sending a line completion command (for example, \n)
     const char terminator = '\n';
     WriteFile(hComPort, &terminator, 1, &bytesWritten, NULL);
 
-    // Чтение ответа
+    // Reading the response
     char buffer[256];
     DWORD bytesRead;
     ReadFile(hComPort, buffer, sizeof(buffer) - 1, &bytesRead, NULL);
-    buffer[bytesRead] = '\0';  // Завершаем строку
+    buffer[bytesRead] = '\0';  // Completing the line
 
     return std::string(buffer);
 }

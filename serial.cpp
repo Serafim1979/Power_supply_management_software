@@ -4,13 +4,13 @@
 HANDLE hComPort = {INVALID_HANDLE_VALUE};
 // Function for opening the COM port
 bool OpenCOMPort(const char* portName) {
-    // Закрыть старое соединение, если оно есть
+    // Close the old connection, if there is one
     if (hComPort != INVALID_HANDLE_VALUE) {
         CloseHandle(hComPort);
         hComPort = INVALID_HANDLE_VALUE;
     }
 
-    // Открыть новый COM-порт
+    // Open a new COM port
     hComPort = CreateFile(
         portName,
         GENERIC_READ | GENERIC_WRITE,
@@ -29,7 +29,7 @@ bool OpenCOMPort(const char* portName) {
     return true;
 }
 
-// Функция для конфигурации COM-порта с указанием индекса источника питания
+// Function for COM port configuration
 bool ConfigureCOMPort(HWND hComboBoxPort, HWND hComboBoxBaudRate, HWND hComboBoxByteSize, HWND hComboBoxParity, HWND hComboBoxStopBits) {
     DCB dcbSerialParams = {0};
 
@@ -39,7 +39,7 @@ bool ConfigureCOMPort(HWND hComboBoxPort, HWND hComboBoxBaudRate, HWND hComboBox
     char parity[256];
     char stopBits[256];
 
-    // Получить текущие параметры порта
+    // Get the current port settings
     if (!GetCommState(hComPort, &dcbSerialParams)) {
         std::cerr << "Failed to get COM port state: " << GetLastError() << std::endl;
         return false;
@@ -51,7 +51,7 @@ bool ConfigureCOMPort(HWND hComboBoxPort, HWND hComboBoxBaudRate, HWND hComboBox
     GetWindowText(hComboBoxParity, parity, sizeof(parity));
     GetWindowText(hComboBoxStopBits, stopBits, sizeof(stopBits));
 
-    // Настроить параметры порта
+    // Configure Port Settings
     dcbSerialParams.BaudRate = std::stoi(baudRate);
     dcbSerialParams.ByteSize = std::stoi(dataBits);
     dcbSerialParams.Parity = (parity == std::string("None")) ? NOPARITY :
@@ -61,13 +61,13 @@ bool ConfigureCOMPort(HWND hComboBoxPort, HWND hComboBoxBaudRate, HWND hComboBox
     dcbSerialParams.StopBits = (stopBits == std::string("1")) ? ONESTOPBIT :
                                 ((stopBits == std::string("1.5")) ? ONE5STOPBITS : TWOSTOPBITS);
 
-    // Установить параметры порта
+    // Set port parameters
     if (!SetCommState(hComPort, &dcbSerialParams)) {
         std::cerr << "Failed to set COM port state: " << GetLastError() << std::endl;
         return false;
     }
 
-    // Настроить таймауты (по умолчанию)
+    // Configure timeouts (default)
     COMMTIMEOUTS timeouts = {0};
     timeouts.ReadIntervalTimeout = 50;
     timeouts.ReadTotalTimeoutConstant = 50;
@@ -83,7 +83,7 @@ bool ConfigureCOMPort(HWND hComboBoxPort, HWND hComboBoxBaudRate, HWND hComboBox
     return true;
 }
 
-//Функции для заполнения ComboBox
+//Functions for filling ComboBox
 void PopulateCOMPorts(HWND hComboBoxPort) {
     for (int i = 1; i <= 256; i++) {
         char portName[10];
@@ -103,7 +103,7 @@ void PopulateByteSizes(HWND hComboBoxByteSize) {
     for (const std::string& size : byteSizes) {
         SendMessage(hComboBoxByteSize, CB_ADDSTRING, 0, (LPARAM)size.c_str());
     }
-    SendMessage(hComboBoxByteSize, CB_SETCURSEL, 3, 0); // Устанавливаем 8 бит как значение по умолчанию
+    SendMessage(hComboBoxByteSize, CB_SETCURSEL, 3, 0); // Setting 8 bits as the default value
 }
 
 void PopulateParities(HWND hComboBoxParity) {
@@ -111,24 +111,24 @@ void PopulateParities(HWND hComboBoxParity) {
     for (const std::string& parity : parities) {
         SendMessage(hComboBoxParity, CB_ADDSTRING, 0, (LPARAM)parity.c_str());
     }
-    SendMessage(hComboBoxParity, CB_SETCURSEL, 0, 0); // Устанавливаем None как значение по умолчанию
+    SendMessage(hComboBoxParity, CB_SETCURSEL, 0, 0); // Setting None as the default value
 }
 void PopulateStopBits(HWND hComboBoxStopBits) {
     std::vector<std::string> stopBits = {"1", "1.5", "2"};
     for (const std::string& bits : stopBits) {
         SendMessage(hComboBoxStopBits, CB_ADDSTRING, 0, (LPARAM)bits.c_str());
     }
-    SendMessage(hComboBoxStopBits, CB_SETCURSEL, 0, 0); // Устанавливаем 1 как значение по умолчанию
+    SendMessage(hComboBoxStopBits, CB_SETCURSEL, 0, 0); // Setting 1 as the default value
 }
 
 void PopulateBaudRates(HWND hComboBoxBaudRate)
 {
-    //Заполнение списка скоростей передачи данных
+    //Filling in the list of data transfer rates
     std::vector<std::string> baudRates = {"4800", "9600", "19200", "38400", "57600", "115200"};
     for (const std::string& rate : baudRates) {
         SendMessage(hComboBoxBaudRate, CB_ADDSTRING, 0, (LPARAM)rate.c_str());
     }
 
-    // Установка значения по умолчанию
+    // Setting the default value
     SendMessage(hComboBoxBaudRate, CB_SETCURSEL, 0, 0);
 }

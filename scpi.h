@@ -4,7 +4,7 @@
 #include <windows.h>
 #include <string>
 
-//Функции для управления источником питания
+//Functions for controlling the power supply
 bool sendCommand(const std::string& command);
 
 std::string query(const std::string& command);
