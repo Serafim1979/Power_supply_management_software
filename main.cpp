@@ -1,3 +1,32 @@
+/*****************************************************************************************************************
+ * Power Supply Control Panel
+ *
+ * This program provides a graphical user interface (GUI) for controlling a power supply device
+ * via a serial (COM) port using the SCPI (Standard Commands for Programmable Instruments) protocol.
+ *
+ * Main features:
+ * - Connect to a power supply device through a user-selected COM port.
+ * - Set and control the output voltage and current of the power supply.
+ * - Adjust the rise and fall times for voltage and current transitions.
+ * - Enable or disable the output of the power supply.
+ * - Monitor real-time measurements of voltage and current.
+ * - Display maximum recorded values for voltage and current during operation.
+ * - Simple status indicators (LED simulation) to show the connection status of the device.
+ * - Timer-based polling to update the measurements periodically.
+ *
+ * The program is structured with the following key components:
+ * - WinMain: The main entry point of the program where the window is created.
+ * - WindowProc: The main window procedure handling messages, including commands from the user interface.
+ * - CreatePowerSupplyControlPanel: A function that dynamically creates the controls for interacting with the power supply.
+ * - Communication functions (e.g., OpenCOMPort, SendSCPICommandAndGetResponse): These handle the communication with the power supply device over the serial port.
+ *
+ * This code is intended to be a starting point for applications requiring serial communication with power supplies or similar devices.
+ * It is also a demonstration of basic WinAPI usage for creating a simple GUI in C++.
+ *
+ * Author: Korolkov Ivan
+ * Date: 31.08.2024
+ ***************************************************************************************************************/
+
 #include <windows.h>
 #include "scpi.h"
 #include "serial.h"
