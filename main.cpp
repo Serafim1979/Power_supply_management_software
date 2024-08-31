@@ -1,1085 +1,390 @@
 #include <windows.h>
-#include <iostream>
-#include <vector>
-#include <string>
-#include <typeinfo>
+#include "scpi.h"
+#include "serial.h"
 
-//Глобальные переменные
-const char g_szClassName[] = "MainWindowClass";
-HWND hComboBoxPort, hComboBoxBaudRate, hComboBoxByteSize, hComboBoxParity, hComboBoxStopBits, hButtonConnect, hLED;
-HWND hEditVoltage, hEditCurrent, hEditRiseTime, hEditFallTime, hEditMemoryBank;
-HWND hButtonSetVoltage, hButtonSetCurrent, hButtonSetRiseTime, hButtonSetFallTime, hButtonSaveSettings;
-HINSTANCE g_hInst;
-HANDLE hComPort = INVALID_HANDLE_VALUE; // Дескриптор COM-порта
+// Global variable for Delay
+static int global_delay = 0;
 
-HWND hStaticVoltage, hStaticCurrent, hStaticMaxVoltage, hStaticMaxCurrent;
+static double maxVoltage = 0.0;
+static double maxCurrent = 0.0;
 
-double maxVoltage = 0.0;
-double maxCurrent = 0.0;
+// Global Control ids
+#define BASE_ID 1000
 
-//Прототипы функций
-LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-void PopulateCOMPorts();
-void PopulateBaudRates();
-void PopulateByteSizes();
-void PopulateParities();
-void PopulateStopBits();
-void UpdateLED(int status);
+// Button IDs for the power supply
+#define ID_CONNECT_BUTTON (BASE_ID + 100)
+#define ID_SET_VOLTAGE_BUTTON (BASE_ID + 101)
+#define ID_SET_CURRENT_BUTTON (BASE_ID + 102)
+#define ID_SET_RISE_BUTTON (BASE_ID + 103)
+#define ID_SET_FALL_BUTTON (BASE_ID + 104)
+#define ID_SET_DELAY_BUTTON (BASE_ID + 105)
+#define ID_OUTPUT_ON_BUTTON (BASE_ID + 106)
+#define ID_OUTPUT_OFF_BUTTON (BASE_ID + 107)
+#define ID_SYST_REM_BUTTON (BASE_ID + 108)
 
-//Функции для работы с COM-портом
-bool OpenCOMPort(const char* portName);
-void CloseCOMPort();
-bool ConfigureCOMPort();
-bool WriteToCOMPort(const char* command);
-bool ReadFromCOMPort(char* buffer, int bufferSize);
+// Ids of input fields for the power supply
+#define ID_VOLTAGE_EDIT (BASE_ID + 200)
+#define ID_CURRENT_EDIT (BASE_ID + 201)
+#define ID_RISE_EDIT (BASE_ID + 202)
+#define ID_FALL_EDIT (BASE_ID + 203)
+#define ID_DELAY_EDIT (BASE_ID + 204)
 
-//Функции для управления источником питания
-void sendCommand(const std::string& command);
-bool SetOnDelay(double onDelay);
-bool SetOffDelay(double offDelay);
-bool EnableCurrentProtection(bool enable);
-bool EnableVoltageProtection(bool enable);
+// Static element identifiers for the power supply
+#define ID_VOLTAGE_DISPLAY (BASE_ID + 300)
+#define ID_CURRENT_DISPLAY (BASE_ID + 301)
+#define ID_MAX_VOLTAGE_DISPLAY (BASE_ID + 302)
+#define ID_MAX_CURRENT_DISPLAY (BASE_ID + 303)
+#define ID_CONNECT_LED (BASE_ID + 304)
+#define ID_TEXT_OUTPUT (BASE_ID + 305)
 
-void SetVoltage();
-void SetCurrent();
-void SetRiseTime();
-void SetFallTime();
-void SaveSettings();
+#define ID_COM_PORT_GROUP (BASE_ID + 306)
 
-//Функции для чтения и регистрации значений
-bool GetVoltage(double& voltage);
-bool GetCurrent(double& current);
-void RegisterMinMaxValues(double voltage, double current);
+#define ID_COMBO_BOX_PORT (BASE_ID + 307)
+#define ID_COMBO_BOX_BAUD_RATE (BASE_ID + 308)
+#define ID_COMBO_BOX_BYTE_SIZE (BASE_ID + 309)  // ComboBoxByteSize
+#define ID_COMBO_BOX_PARITY (BASE_ID + 310)  // ComboBoxParity
+#define ID_COMBO_BOX_STOP_BITS (BASE_ID + 311)  // ComboBoxStopBits
 
-//Функции для графического интерфейса
-void CreateMainWindow();
-void UpdateDisplay();
-void VisualizeCurrent();
-void UpdateLED(int ledID, int status);
+#define ID_SETTINGS_GROUP (BASE_ID + 312)
 
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-    WNDCLASSEX wc;
-    HWND hwnd;
-    MSG Msg;
+#define IDT_TIMER1 1
 
-    // Инициализация структуры WNDCLASSEX
-    wc.cbSize        = sizeof(WNDCLASSEX);
-    wc.style         = 0;
-    wc.lpfnWndProc   = WndProc;
-    wc.cbClsExtra    = 0;
-    wc.cbWndExtra    = 0;
-    wc.hInstance     = hInstance;
-    wc.hIcon         = LoadIcon(NULL, IDI_APPLICATION);
-    wc.hCursor       = LoadCursor(NULL, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW+1);
-    wc.lpszMenuName  = NULL;
-    wc.lpszClassName = g_szClassName;
-    wc.hIconSm       = LoadIcon(NULL, IDI_APPLICATION);
+// Structure for storing connection parameters and settings
+struct PowerSupplyConfig {
+    std::string name;
+    std::string comPort;
+    std::string baudRate;
+    std::string byteSize;
+    std::string parity;
+    std::string stopBits;
+    std::string voltage;
+    std::string current;
+    std::string rise;
+    std::string fall;
+    std::string delay;
+};
 
-    // Регистрация оконного класса
-    if(!RegisterClassEx(&wc)) {
-        MessageBox(NULL, "Window Registration Failed!", "Error", MB_ICONEXCLAMATION | MB_OK);
-        return 0;
-    }
+// Global variables for storing configurations
+PowerSupplyConfig powerSupplies;
 
-    // Создание главного окна
-    hwnd = CreateWindowEx(
-        WS_EX_CLIENTEDGE,
-        g_szClassName,
-        "Power Supply Control Panel, 4160",
+// Function for creating a power supply control panel
+void CreatePowerSupplyControlPanel(HWND hwnd, const PowerSupplyConfig& config, int offsetX);
+
+LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam);
+
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow)
+{
+    const char CLASS_NAME[] = "PowerSupplyWindowClass";
+
+    WNDCLASS wc = {};
+    wc.lpfnWndProc = WindowProc;
+    wc.hInstance = hInstance;
+    wc.lpszClassName = CLASS_NAME;
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+
+    RegisterClass(&wc);
+
+    HWND hwnd = CreateWindowEx(
+        0,
+        CLASS_NAME,
+        "Power Supply Control Panel",
         WS_OVERLAPPEDWINDOW,
-        CW_USEDEFAULT, CW_USEDEFAULT, 800, 600,
-        NULL, NULL, hInstance, NULL);
+        CW_USEDEFAULT, CW_USEDEFAULT, 435, 700,
+        NULL, NULL, hInstance, NULL
+    );
 
-    if(hwnd == NULL) {
-        MessageBox(NULL, "Window Creation Failed!", "Error", MB_ICONEXCLAMATION | MB_OK);
+    if(hwnd == NULL)
+    {
         return 0;
     }
+
+    CreatePowerSupplyControlPanel(hwnd, powerSupplies, 0);
 
     ShowWindow(hwnd, nCmdShow);
     UpdateWindow(hwnd);
 
-    // Цикл сообщений
-    while(GetMessage(&Msg, NULL, 0, 0) > 0) {
-        TranslateMessage(&Msg);
-        DispatchMessage(&Msg);
+    MSG msg;
+    while(GetMessage(&msg, NULL, 0, 0))
+    {
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
     }
 
-    return Msg.wParam;
+    return 0;
 }
 
-LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-    switch(msg) {
-        case WM_CREATE:
-            {
-            // Создание ComboBox для выбора COM-порта
-            hComboBoxPort = CreateWindow("COMBOBOX", NULL,
-                CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_OVERLAPPED | WS_VISIBLE,
-                50, 50, 150, 200, hwnd, NULL, g_hInst, NULL);
-            PopulateCOMPorts();
-
-            // Создание ComboBox для выбора скорости передачи данных
-            hComboBoxBaudRate = CreateWindow("COMBOBOX", NULL,
-                CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_OVERLAPPED | WS_VISIBLE,
-                50, 100, 150, 200, hwnd, NULL, g_hInst, NULL);
-            PopulateBaudRates();
-
-            // Создание ComboBox для выбора размера байта
-            hComboBoxByteSize = CreateWindow("COMBOBOX", NULL,
-                CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_OVERLAPPED | WS_VISIBLE,
-                50, 150, 150, 200, hwnd, NULL, g_hInst, NULL);
-            PopulateByteSizes();
-
-            // Создание ComboBox для выбора проверки четности
-            hComboBoxParity = CreateWindow("COMBOBOX", NULL,
-                CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_OVERLAPPED | WS_VISIBLE,
-                50, 200, 150, 200, hwnd, NULL, g_hInst, NULL);
-            PopulateParities();
-
-            // Создание ComboBox для выбора стоп-битов
-            hComboBoxStopBits = CreateWindow("COMBOBOX", NULL,
-                CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_OVERLAPPED | WS_VISIBLE,
-                50, 250, 150, 200, hwnd, NULL, g_hInst, NULL);
-            PopulateStopBits();
-
-            // Создание кнопки Connect
-            hButtonConnect = CreateWindow("BUTTON", "Connect",
-                WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-                50, 300, 100, 30, hwnd, (HMENU)1, g_hInst, NULL);
-
-            // Создание светодиода для индикации состояния
-            hLED = CreateWindow("STATIC", NULL,
-                WS_CHILD | WS_VISIBLE | SS_CENTER,
-                160, 300, 20, 20, hwnd, NULL, g_hInst, NULL);
-            UpdateLED(0); // Нейтральное состояние (серый)
-
-
-            hStaticVoltage = CreateWindow("STATIC", "Voltage: 0.0 V",
-                WS_CHILD | WS_VISIBLE | SS_CENTER,
-                250, 50, 150, 20, hwnd, NULL, g_hInst, NULL);
-
-            hStaticCurrent = CreateWindow("STATIC", "Current: 0.0 A",
-                WS_CHILD | WS_VISIBLE | SS_CENTER,
-                250, 100, 150, 20, hwnd, NULL, g_hInst, NULL);
-
-            hStaticMaxVoltage = CreateWindow("STATIC", "Max Voltage: 0.0 V",
-                WS_CHILD | WS_VISIBLE | SS_CENTER,
-                250, 150, 150, 20, hwnd, NULL, g_hInst, NULL);
-
-            hStaticMaxCurrent = CreateWindow("STATIC", "Max Current: 0.0 A",
-                WS_CHILD | WS_VISIBLE | SS_CENTER,
-                250, 200, 150, 20, hwnd, NULL, g_hInst, NULL);
-
-            hEditVoltage = CreateWindow("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER,
-                50, 350, 100, 20, hwnd, NULL, g_hInst, NULL);
-            hButtonSetVoltage = CreateWindow("BUTTON", "Set Voltage", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-                160, 350, 100, 20, hwnd, (HMENU)2, g_hInst, NULL);
-
-            hEditCurrent = CreateWindow("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER,
-                50, 380, 100, 20, hwnd, NULL, g_hInst, NULL);
-            hButtonSetCurrent = CreateWindow("BUTTON", "Set Current", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-                160, 380, 100, 20, hwnd, (HMENU)3, g_hInst, NULL);
-
-            hEditRiseTime = CreateWindow("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER,
-                50, 410, 100, 20, hwnd, NULL, g_hInst, NULL);
-            hButtonSetRiseTime = CreateWindow("BUTTON", "Set Rise Time", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-                160, 410, 100, 20, hwnd, (HMENU)4, g_hInst, NULL);
-
-            hEditFallTime = CreateWindow("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER,
-                50, 440, 100, 20, hwnd, NULL, g_hInst, NULL);
-            hButtonSetFallTime = CreateWindow("BUTTON", "Set Fall Time", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-                160, 440, 100, 20, hwnd, (HMENU)5, g_hInst, NULL);
-
-            hEditMemoryBank = CreateWindow("COMBOBOX", "", CBS_DROPDOWN | WS_CHILD | WS_VISIBLE,
-                50, 470, 100, 100, hwnd, NULL, g_hInst, NULL);
-            for (int i = 1; i <= 9; ++i) {
-                char buffer[10];
-                snprintf(buffer, sizeof(buffer), "%d", i);
-                SendMessage(hEditMemoryBank, CB_ADDSTRING, 0, (LPARAM)buffer);
-            }
-            hButtonSaveSettings = CreateWindow("BUTTON", "Save Settings", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-                160, 470, 100, 20, hwnd, (HMENU)6, g_hInst, NULL);
-            }
-            break;
-
-        case WM_COMMAND:
+LRESULT CALLBACK WindowProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+{
+    switch(uMsg)
+    {
+    case WM_TIMER:
         {
-            if(LOWORD(wParam) == 1) { // Нажата кнопка Connect
-                char portName[10];
-                GetWindowText(hComboBoxPort, portName, 10);
+            if(wParam == IDT_TIMER1)
+            {
+                if(hComPort != INVALID_HANDLE_VALUE)
+                {
+                    std::string voltage = SendSCPICommandAndGetResponse(hComPort, "MEAS:VOLT?");
+                    UpdateVoltageDisplay(hWnd, ID_VOLTAGE_DISPLAY, voltage);
 
-            // Проверка, был ли выбран COM-порт
-            if (strlen(portName) == 0) {
-                MessageBox(hwnd, "Please select a COM port.", "Error", MB_OK | MB_ICONERROR);
-                UpdateLED(2); // Неудача (красный)
-                return 0;
-            }
+                    std::string current = SendSCPICommandAndGetResponse(hComPort, "MEAS:CURR?");
+                    UpdateCurrentDisplay(hWnd, ID_CURRENT_DISPLAY, current);
 
-            // Попробовать открыть и настроить COM-порт
-            bool portOpen = OpenCOMPort(portName);
-            bool portConfigured = ConfigureCOMPort(); //(baudRate, byteSize, parity, stopBits);
-
-            if (portOpen && portConfigured) {
-                UpdateLED(1); // Успех (зеленый)
-
-                // Получение текущих значений
-                double voltage = 0.0, current = 0.0;
-                    if (GetVoltage(voltage) && GetCurrent(current)) {
-
-                        sendCommand("SYST:REM");
-                        sendCommand("OUTP ON");
-
-                        RegisterMinMaxValues(voltage, current);
-
-                        // Обновление GUI с текущими значениями
-                        char buffer[50];
-
-                        snprintf(buffer, sizeof(buffer), "Voltage: %.2f V", voltage);
-                        SetWindowText(hStaticVoltage, buffer);
-                        snprintf(buffer, sizeof(buffer), "Current: %.2f A", current);
-                        SetWindowText(hStaticCurrent, buffer);
-
-                        snprintf(buffer, sizeof(buffer), "Max Voltage: %.2f V", maxVoltage);
-                        SetWindowText(hStaticMaxVoltage, buffer);
-                        snprintf(buffer, sizeof(buffer), "Max Current: %.2f A", maxCurrent);
-                        SetWindowText(hStaticMaxCurrent, buffer);
-                    } else {
-                        UpdateLED(2); // Неудача (красный)
+                    if(std::stod(voltage) > maxVoltage)
+                    {
+                        maxVoltage = std::stod(voltage);
                     }
-                } else {
-                    UpdateLED(2); // Неудача (красный)
+                    if(std::stod(current) > maxCurrent)
+                    {
+                        maxCurrent = std::stod(current);
+                    }
+
+                    UpdateMaxVoltageDisplay(hWnd, ID_MAX_VOLTAGE_DISPLAY, reduceTrailingZeros(maxVoltage));
+                    UpdateMaxCurrentDisplay(hWnd, ID_MAX_CURRENT_DISPLAY, reduceTrailingZeros(maxCurrent));
                 }
-            }
-            else if (LOWORD(wParam) == 2) { // Нажата кнопка Set Voltage
-                SetVoltage();
-            } else if (LOWORD(wParam) == 3) { // Нажата кнопка Set Current
-                SetCurrent();
-            } else if (LOWORD(wParam) == 4) { // Нажата кнопка Set Rise Time
-                SetRiseTime();
-            } else if (LOWORD(wParam) == 5) { // Нажата кнопка Set Fall Time
-                SetFallTime();
-            } else if (LOWORD(wParam) == 6) { // Нажата кнопка Save Settings
-                SaveSettings();
             }
         }
         break;
 
-        case WM_CLOSE:
-            // Закрыть COM-порт при завершении работы
-            if (hComPort != INVALID_HANDLE_VALUE) {
-                CloseHandle(hComPort);
+    case WM_COMMAND:
+        {
+            int wmId = LOWORD(wParam);
+            if(wmId == ID_CONNECT_BUTTON)
+            {
+                StartPollingTimer(hWnd, IDT_TIMER1);
+                HWND hComboBoxPortLocal = GetDlgItem(hWnd, ID_COMBO_BOX_PORT);
+                char selectedPort[256];
+                GetWindowText(hComboBoxPortLocal, selectedPort, sizeof(selectedPort));
+                if(strlen(selectedPort) == 0)
+                {
+                    MessageBox(hWnd, "Please select a COM port.", "Error", MB_OK | MB_ICONERROR);
+                    return 0;
+                }
+
+                HWND hComboBoxBaudRateLocal = GetDlgItem(hWnd, ID_COMBO_BOX_BAUD_RATE);
+                HWND hComboBoxByteSizeLocal = GetDlgItem(hWnd, ID_COMBO_BOX_BYTE_SIZE);
+                HWND hComboBoxParityLocal = GetDlgItem(hWnd, ID_COMBO_BOX_PARITY);
+                HWND hComboBoxStopBitsLocal = GetDlgItem(hWnd, ID_COMBO_BOX_STOP_BITS);
+
+                HWND hConnectLedLocal = GetDlgItem(hWnd, ID_CONNECT_LED);
+
+                if (OpenCOMPort(selectedPort) && ConfigureCOMPort(hComboBoxPortLocal, hComboBoxBaudRateLocal, hComboBoxByteSizeLocal, hComboBoxParityLocal, hComboBoxStopBitsLocal))
+                {
+                    // Successful opening of the COM port
+                    // getting information about the source
+                    std::string str = query("*IDN?");
+                    std::string id_supply_power;
+                    if(!str.empty())
+                    {
+                        id_supply_power = str.substr(12, 26);
+                    }
+
+                    HWND hTextOutputLocal = GetDlgItem(hWnd, ID_TEXT_OUTPUT);
+
+                    SetWindowText(hTextOutputLocal, id_supply_power.c_str());
+
+                    // Successful connection, set the green color of the diode
+                    SetLedColor(hConnectLedLocal, RGB(0, 255, 0));  // Green
+                }
+                else
+                {
+                    // Failed to connect, set the red color of the diode
+                    SetLedColor(hConnectLedLocal, RGB(255, 0, 0));  // Red
+                    MessageBox(hWnd, "Failed to open COM port.", "Error", MB_OK | MB_ICONERROR);
+                }
             }
-            DestroyWindow(hwnd);
-            break;
-        case WM_DESTROY:
-            PostQuitMessage(0);
-            break;
-        default:
-            return DefWindowProc(hwnd, msg, wParam, lParam);
-    }
-    return 0;
-}
 
-
-
-// Функции для работы с COM-портом (заглушки)
-bool OpenCOMPort(const char* portName) {
-    // Закрыть старое соединение, если оно есть
-    if (hComPort != INVALID_HANDLE_VALUE) {
-        CloseHandle(hComPort);
-    }
-
-    // Открыть новый COM-порт
-    hComPort = CreateFile(
-        portName,
-        GENERIC_READ | GENERIC_WRITE,
-        0,              // No sharing
-        NULL,           // No security attributes
-        OPEN_EXISTING,  // Open existing port
-        0,              // No overlapped I/O
-        NULL            // No template file
-    );
-
-    if (hComPort == INVALID_HANDLE_VALUE) {
-        std::cerr << "Failed to open COM port: " << GetLastError() << std::endl;
-        return false;
-    }
-
-    return true;
-}
-
-
-void CloseCOMPort() {
-    std::cout << "CloseCOMPort" << std::endl;
-}
-
-void PopulateByteSizes() {
-    std::vector<std::string> byteSizes = {"5", "6", "7", "8"};
-    for (const std::string& size : byteSizes) {
-        SendMessage(hComboBoxByteSize, CB_ADDSTRING, 0, (LPARAM)size.c_str());
-    }
-    SendMessage(hComboBoxByteSize, CB_SETCURSEL, 3, 0); // Устанавливаем 8 бит как значение по умолчанию
-}
-
-void PopulateParities() {
-    std::vector<std::string> parities = {"None", "Odd", "Even", "Mark", "Space"};
-    for (const std::string& parity : parities) {
-        SendMessage(hComboBoxParity, CB_ADDSTRING, 0, (LPARAM)parity.c_str());
-    }
-    SendMessage(hComboBoxParity, CB_SETCURSEL, 0, 0); // Устанавливаем None как значение по умолчанию
-}
-void PopulateStopBits() {
-    std::vector<std::string> stopBits = {"1", "1.5", "2"};
-    for (const std::string& bits : stopBits) {
-        SendMessage(hComboBoxStopBits, CB_ADDSTRING, 0, (LPARAM)bits.c_str());
-    }
-    SendMessage(hComboBoxStopBits, CB_SETCURSEL, 0, 0); // Устанавливаем 1 как значение по умолчанию
-}
-
-bool ConfigureCOMPort() {
-    DCB dcbSerialParams = {0};
-
-    char portName[256];
-    char baudRate[256];
-    char dataBits[256];
-    char parity[256];
-    char stopBits[256];
-
-    // Получить текущие параметры порта
-    if (!GetCommState(hComPort, &dcbSerialParams)) {
-        std::cerr << "Failed to get COM port state: " << GetLastError() << std::endl;
-        return false;
-    }
-
-    GetWindowText(hComboBoxPort, portName, sizeof(portName));
-    GetWindowText(hComboBoxBaudRate, baudRate, sizeof(baudRate));
-    GetWindowText(hComboBoxByteSize, dataBits, sizeof(dataBits));
-    GetWindowText(hComboBoxParity, parity, sizeof(parity));
-    GetWindowText(hComboBoxStopBits, stopBits, sizeof(stopBits));
-
-    // Настроить параметры порта
-    dcbSerialParams.BaudRate = std::stoi(baudRate);
-    dcbSerialParams.ByteSize = std::stoi(dataBits);
-    dcbSerialParams.Parity = (parity == std::string("None")) ? NOPARITY : ((parity == std::string("Odd")) ? ODDPARITY : ((parity == std::string("Even")) ? EVENPARITY : ((parity == std::string("Mark")) ? MARKPARITY : SPACEPARITY)));
-    dcbSerialParams.StopBits = (stopBits == std::string("1")) ? ONESTOPBIT : ((stopBits == std::string("1.5")) ? ONE5STOPBITS : TWOSTOPBITS);
-
-    // Установить параметры порта   Здесь выбрасывает ошибку
-    if (!SetCommState(hComPort, &dcbSerialParams)) {
-        std::cerr << "Failed to set COM port state:? " << GetLastError() << std::endl;
-        return false;
-    }
-
-    // Настроить таймауты (по умолчанию)
-    COMMTIMEOUTS timeouts = {0};
-    timeouts.ReadIntervalTimeout = 50;
-    timeouts.ReadTotalTimeoutConstant = 50;
-    timeouts.ReadTotalTimeoutMultiplier = 10;
-    timeouts.WriteTotalTimeoutConstant = 50;
-    timeouts.WriteTotalTimeoutMultiplier = 10;
-
-    if (!SetCommTimeouts(hComPort, &timeouts)) {
-        std::cerr << "Failed to set COM port timeouts: " << GetLastError() << std::endl;
-        return false;
-    }
-
-    return true;
-}
-
-
-bool WriteToCOMPort(const char* command) {
-    DWORD bytesWritten;
-    if (!WriteFile(hComPort, command, strlen(command), &bytesWritten, NULL)) {
-        std::cerr << "Failed to write to COM port" << std::endl;
-        return false;
-    }
-    return true;
-}
-
-bool ReadFromCOMPort(char* buffer, int bufferSize) {
-    DWORD bytesRead;
-    if (!ReadFile(hComPort, buffer, bufferSize - 1, &bytesRead, NULL)) {
-        std::cerr << "Failed to read from COM port" << std::endl;
-        return false;
-    }
-    buffer[bytesRead] = '\0';
-
-    return true;
-}
-
-////////////////////////////////////////////////////////////////////////////////////////////////
-//Функции для управления источником питания
-void SetVoltage() {
-    char buffer[20];
-    GetWindowText(hEditVoltage, buffer, sizeof(buffer));
-    double voltage = atof(buffer);
-    char command[50];
-    snprintf(command, sizeof(command), "VOLT %.2f\n", voltage);
-    if (WriteToCOMPort(command)) {
-        std::cout << "Voltage set to " << voltage << " V" << std::endl;
-    }
-}
-
-void SetCurrent() {
-    char buffer[20];
-    GetWindowText(hEditCurrent, buffer, sizeof(buffer));
-    double current = atof(buffer);
-    char command[50];
-    snprintf(command, sizeof(command), "CURR %.2f\n", current);
-    if (WriteToCOMPort(command)) {
-        std::cout << "Current set to " << current << " A" << std::endl;
-    }
-}
-
-void SetRiseTime() {
-    char buffer[20];
-    GetWindowText(hEditRiseTime, buffer, sizeof(buffer));
-    int riseTime = atoi(buffer);
-    char command[50];
-    snprintf(command, sizeof(command), "CURR:RISE %d\n", riseTime);
-    if (WriteToCOMPort(command)) {
-        std::cout << "Rise time set to " << riseTime << " ms" << std::endl;
-    }
-}
-
-void SetFallTime() {
-    char buffer[20];
-    GetWindowText(hEditFallTime, buffer, sizeof(buffer));
-    int fallTime = atoi(buffer);
-    char command[50];
-    snprintf(command, sizeof(command), "CURR:FALL %d\n", fallTime);
-    if (WriteToCOMPort(command)) {
-        std::cout << "Fall time set to " << fallTime << " ms" << std::endl;
-    }
-}
-
-void SaveSettings() {
-    char buffer[10];
-    GetWindowText(hEditMemoryBank, buffer, sizeof(buffer));
-    int memoryBank = atoi(buffer);
-    char command[50];
-    snprintf(command, sizeof(command), "*SAV %d\n", memoryBank);
-    if (WriteToCOMPort(command)) {
-        std::cout << "Settings saved to memory bank " << memoryBank << std::endl;
-    }
-}
-
-bool SetOnDelay(double onDelay) {
-    std::cout << "SetOnDelay" << std::endl;
-    return true;
-}
-
-bool SetOffDelay(double offDelay) {
-    std::cout << "SetOffDelay" << std::endl;
-    return true;
-}
-
-bool EnableCurrentProtection(bool enable) {
-    std::cout << "EnableCurrentProtection" << std::endl;
-    return true;
-}
-
-bool EnableVoltageProtection(bool enable) {
-    std::cout << "EnableVoltageProtection" << std::endl;
-    return true;
-}
-
-
-//Функции для чтения и регистрации значений
-bool GetVoltage(double& voltage) {
-    if (hComPort == INVALID_HANDLE_VALUE) {
-        std::cerr << "COM port not open." << std::endl;
-        return false;
-    }
-
-    //Отправка команды для получения значения напряжения
-    const char* command = "MEAS:VOLT?\n";
-    if (!WriteToCOMPort(command)) {
-        return false;
-    }
-
-    //Чтение ответа
-    char buffer[256];
-    if (!ReadFromCOMPort(buffer, sizeof(buffer))) {
-        return false;
-    }
-
-    //Парсинг ответа
-    voltage = atof(buffer);
-
-    return true;
-}
-
-bool GetCurrent(double& current) {
-    if (hComPort == INVALID_HANDLE_VALUE) {
-        std::cerr << "COM port not open." << std::endl;
-        return false;
-    }
-
-    //Отправка команды для получения значения тока
-    const char* command = "MEAS:CURR?\n";
-    if (!WriteToCOMPort(command)) {
-        return false;
-    }
-
-    //Чтение ответа
-    char buffer[256];
-    if (!ReadFromCOMPort(buffer, sizeof(buffer))) {
-        return false;
-    }
-
-    //Парсинг ответа
-    current = atof(buffer);
-
-    return true;
-}
-
-void RegisterMinMaxValues(double voltage, double current) {
-    static double maxVoltage = 0;
-    static double maxCurrent = 0;
-
-    if (voltage > maxVoltage) {
-        maxVoltage = voltage;
-    }
-
-    if (current > maxCurrent) {
-        maxCurrent = current;
-    }
-
-    //Обновить GUI с максимальными значениями
-    UpdateDisplay();
-}
-
-// Функции для графического интерфейса
-void CreateMainWindow() {
-    std::cout << "CreateMainWindow" << std::endl;
-}
-
-void UpdateDisplay() {
-    std::cout << "UpdateDisplay()" << std::endl;
-}
-
-void VisualizeCurrent() {
-    std::cout << "VisualizeCurrent" << std::endl;
-}
-
-void sendCommand(const std::string& command) {
-    DWORD bytes_written;
-    std::string cmd = command + "\n";
-    if (!WriteFile(hComPort, cmd.c_str(), cmd.length(), &bytes_written, NULL)) {
-            throw std::runtime_error("Error writing to serial port");
-    }
-}
-
-void UpdateLED(int status) {
-    HWND hwndLED = hLED;
-    HDC hdc = GetDC(hwndLED);
-    HBRUSH hBrush;
-
-    switch(status) {
-        case 0: // Нейтральное состояние (серый)
-            hBrush = CreateSolidBrush(RGB(128, 128, 128));
-            break;
-        case 1: // Успех (зеленый)
-            hBrush = CreateSolidBrush(RGB(0, 255, 0));
-            break;
-        case 2: // Неудача (красный)
-            hBrush = CreateSolidBrush(RGB(255, 0, 0));
-            break;
-        default:
-            hBrush = CreateSolidBrush(RGB(128, 128, 128));
-            break;
-    }
-
-    RECT rect;
-    GetClientRect(hwndLED, &rect);
-    FillRect(hdc, &rect, hBrush);
-    DeleteObject(hBrush);
-    ReleaseDC(hwndLED, hdc);
-}
-
-//Функции для заполнения ComboBox
-void PopulateCOMPorts() {
-    for (int i = 1; i <= 256; i++) {
-        char portName[10];
-        snprintf(portName, sizeof(portName), "COM%d", i);
-
-        HANDLE hCOM = CreateFile(portName, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
-        if (hCOM != INVALID_HANDLE_VALUE) {
-            CloseHandle(hCOM);
-            SendMessage(hComboBoxPort, CB_ADDSTRING, 0, (LPARAM)portName);
+            if(wmId == ID_SYST_REM_BUTTON)
+            {
+                sendCommand("SYST:REM");
+            }
+            else if(wmId == ID_OUTPUT_ON_BUTTON)
+            {
+                if(global_delay > 0)
+                {
+                    Sleep(global_delay);
+                }
+                sendCommand("OUTP ON");
+            }
+            else if(wmId == ID_OUTPUT_OFF_BUTTON)
+            {
+                sendCommand("OUTP OFF");
+            }
+            else if(wmId == ID_SET_VOLTAGE_BUTTON)
+            {
+                char buffer[256];
+                GetWindowText(GetDlgItem(hWnd, ID_VOLTAGE_EDIT), buffer, sizeof(buffer));
+                powerSupplies.voltage = buffer;
+                std::string cmd = "VOLT " + powerSupplies.voltage;
+                sendCommand(cmd);
+            }
+            else if(wmId == ID_SET_CURRENT_BUTTON)
+            {
+                char buffer[256];
+                GetWindowText(GetDlgItem(hWnd, ID_CURRENT_EDIT), buffer, sizeof(buffer));
+                powerSupplies.current = buffer;
+                std::string cmd = "CURR " + powerSupplies.current;
+                sendCommand(cmd);
+            }
+            else if(wmId == ID_SET_RISE_BUTTON)
+            {
+                char buffer[256];
+                GetWindowText(GetDlgItem(hWnd, ID_RISE_EDIT), buffer, sizeof(buffer));
+                powerSupplies.rise = buffer;
+                std::string cmd = "RISE " + powerSupplies.rise;
+                sendCommand(cmd);
+            }
+            else if(wmId == ID_SET_FALL_BUTTON)
+            {
+                char buffer[256];
+                GetWindowText(GetDlgItem(hWnd, ID_FALL_EDIT), buffer, sizeof(buffer));
+                powerSupplies.fall = buffer;
+                std::string cmd = "FALL " + powerSupplies.fall;
+                sendCommand(cmd);
+            }
+            else if(wmId == ID_SET_DELAY_BUTTON)
+            {
+                char buffer[256];
+                GetWindowText(GetDlgItem(hWnd, ID_DELAY_EDIT), buffer, sizeof(buffer));
+                powerSupplies.delay = buffer;
+                global_delay = std::stoi(powerSupplies.delay);
+            }
         }
+        break;
+
+
+    case WM_DESTROY:
+        {
+            StopPollingTimer(hWnd, IDT_TIMER1);
+            PostQuitMessage(0);
+            return 0;
+        }
+        break;
     }
+    return DefWindowProc(hWnd, uMsg, wParam, lParam);
 }
 
-void PopulateBaudRates() {
-    //Заполнение списка скоростей передачи данных
-    std::vector<std::string> baudRates = {"9600", "19200", "38400", "57600", "115200"};
-    for (const std::string& rate : baudRates) {
-        SendMessage(hComboBoxBaudRate, CB_ADDSTRING, 0, (LPARAM)rate.c_str());
-    }
+// Function for creating a power supply control panel
+void CreatePowerSupplyControlPanel(HWND hwnd, const PowerSupplyConfig& config, int offsetX) {
+    // Panel Options
+    const int margin = 10;
+    const int groupBoxHeight = 600;
+    const int groupBoxWidth = 400;
 
-    // Установка значения по умолчанию
-    SendMessage(hComboBoxBaudRate, CB_SETCURSEL, 0, 0);
+    // Creating a text field for query output
+    CreateWindow("STATIC", "", WS_VISIBLE | WS_CHILD | SS_CENTER,
+                 margin + offsetX, margin, 250, 20, hwnd, (HMENU)ID_TEXT_OUTPUT, NULL, NULL);
+
+    // Creating a GroupBox for the COM port
+    HWND hComPortGroup = CreateWindow("BUTTON", "COM Port Settings", WS_VISIBLE | WS_CHILD | BS_GROUPBOX,
+                                      margin + offsetX, 40, groupBoxWidth, groupBoxHeight / 2, hwnd, (HMENU)ID_COM_PORT_GROUP, NULL, NULL);
+
+    // Creating a combo box for selecting a COM port
+    HWND hComboBoxPort = CreateWindow("COMBOBOX", "", WS_VISIBLE | WS_CHILD | CBS_DROPDOWNLIST,
+                                  margin + offsetX + 10, 75, 100, 100, hwnd, (HMENU)ID_COMBO_BOX_PORT, NULL, NULL);
+    PopulateCOMPorts(hComboBoxPort);
+
+    // Creating a ComboBox to select the data transfer rate
+    HWND hComboBoxBaudRate = CreateWindow("COMBOBOX", NULL,
+                CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_OVERLAPPED | WS_VISIBLE,
+                margin + offsetX + 10, 120, 100, 200, hwnd, (HMENU)ID_COMBO_BOX_BAUD_RATE, NULL, NULL);
+    PopulateBaudRates(hComboBoxBaudRate);
+
+    // Creating a ComboBox to select the byte size
+    HWND hComboBoxByteSize = CreateWindow("COMBOBOX", NULL,
+                CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_OVERLAPPED | WS_VISIBLE,
+                margin + offsetX + 10, 165, 100, 200, hwnd, (HMENU)ID_COMBO_BOX_BYTE_SIZE, NULL, NULL);
+    PopulateByteSizes(hComboBoxByteSize);
+
+    // Creating a ComboBox to select a parity check
+    HWND hComboBoxParity = CreateWindow("COMBOBOX", NULL,
+                CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_OVERLAPPED | WS_VISIBLE,
+                margin + offsetX + 10, 210, 100, 200, hwnd, (HMENU)ID_COMBO_BOX_PARITY, NULL, NULL);
+    PopulateParities(hComboBoxParity);
+
+    // Creating a ComboBox for selecting stop bits
+    HWND hComboBoxStopBits = CreateWindow("COMBOBOX", NULL,
+                CBS_DROPDOWN | CBS_HASSTRINGS | WS_CHILD | WS_OVERLAPPED | WS_VISIBLE,
+                margin + offsetX + 10, 255, 100, 200, hwnd, (HMENU)ID_COMBO_BOX_STOP_BITS, NULL, NULL);
+    PopulateStopBits(hComboBoxStopBits);
+
+    // Creating a Connect button and a diode simulator
+    CreateWindow("BUTTON", "Connect", WS_VISIBLE | WS_CHILD,
+                 margin + offsetX + 10, 300, 100, 30, hwnd, (HMENU)ID_CONNECT_BUTTON, NULL, NULL);
+
+    HWND hConnectLed = CreateWindow("STATIC", "", WS_VISIBLE | WS_CHILD | SS_CENTER,
+                                     margin + offsetX + 120, 300, 30, 30, hwnd, (HMENU)ID_CONNECT_LED, NULL, NULL);
+
+    // Set the initial color of the diode (gray)
+    HBRUSH hGrayBrush = CreateSolidBrush(RGB(128, 128, 128));
+    RECT ledRect = { 0, 0, 30, 30 };  // Creating a RECT object
+    HDC hdc = GetDC(hConnectLed);
+    FillRect(hdc, &ledRect, hGrayBrush); // Transmitting the address of the RECT object
+    ReleaseDC(hConnectLed, hdc);
+    DeleteObject(hGrayBrush);
+
+
+    // Creating a GroupBox for power supply settings
+    HWND hSettingsGroup = CreateWindow("BUTTON", "Power Supply Settings", WS_VISIBLE | WS_CHILD | BS_GROUPBOX,
+                                       margin + offsetX, 360, groupBoxWidth, groupBoxHeight / 2, hwnd, (HMENU)ID_SETTINGS_GROUP, NULL, NULL);
+
+    // Creating text fields and buttons for setting values
+    CreateWindow("STATIC", "Voltage:", WS_VISIBLE | WS_CHILD | SS_LEFT,
+                 margin + offsetX + 10, 400, 60, 20, hwnd, NULL, NULL, NULL);
+    CreateWindow("EDIT", config.voltage.c_str(), WS_VISIBLE | WS_CHILD | WS_BORDER,
+                 margin + offsetX + 70, 400, 50, 20, hwnd, (HMENU)ID_VOLTAGE_EDIT, NULL, NULL);
+    CreateWindow("BUTTON", "Set Voltage", WS_VISIBLE | WS_CHILD,
+                 margin + offsetX + 120, 400, 80, 20, hwnd, (HMENU)ID_SET_VOLTAGE_BUTTON, NULL, NULL);
+
+    CreateWindow("STATIC", "Current:", WS_VISIBLE | WS_CHILD | SS_LEFT,
+                 margin + offsetX + 10, 430, 60, 20, hwnd, NULL, NULL, NULL);
+    CreateWindow("EDIT", config.current.c_str(), WS_VISIBLE | WS_CHILD | WS_BORDER,
+                 margin + offsetX + 70, 430, 50, 20, hwnd, (HMENU)ID_CURRENT_EDIT, NULL, NULL);
+    CreateWindow("BUTTON", "Set Current", WS_VISIBLE | WS_CHILD,
+                 margin + offsetX + 120, 430, 80, 20, hwnd, (HMENU)ID_SET_CURRENT_BUTTON, NULL, NULL);
+
+    // Field for entering the Rise value
+    CreateWindow("STATIC", "Rise:", WS_VISIBLE | WS_CHILD | SS_LEFT,
+                 margin + offsetX + 10, 460, 60, 20, hwnd, NULL, NULL, NULL);
+    CreateWindow("EDIT", config.rise.c_str(), WS_VISIBLE | WS_CHILD | WS_BORDER,
+                 margin + offsetX + 70, 460, 50, 20, hwnd, (HMENU)ID_RISE_EDIT, NULL, NULL);
+    CreateWindow("BUTTON", "Set Rise", WS_VISIBLE | WS_CHILD,
+                 margin + offsetX + 120, 460, 80, 20, hwnd, (HMENU)ID_SET_RISE_BUTTON, NULL, NULL);
+
+    // Field for entering the Fall value
+    CreateWindow("STATIC", "Fall:", WS_VISIBLE | WS_CHILD | SS_LEFT,
+                 margin + offsetX + 10, 490, 60, 20, hwnd, NULL, NULL, NULL);
+    CreateWindow("EDIT", config.fall.c_str(), WS_VISIBLE | WS_CHILD | WS_BORDER,
+                 margin + offsetX + 70, 490, 50, 20, hwnd, (HMENU)ID_FALL_EDIT, NULL, NULL);
+    CreateWindow("BUTTON", "Set Fall", WS_VISIBLE | WS_CHILD,
+                 margin + offsetX + 120, 490, 80, 20, hwnd, (HMENU)ID_SET_FALL_BUTTON, NULL, NULL);
+
+    // Field for entering the Delay value
+    CreateWindow("STATIC", "Delay:", WS_VISIBLE | WS_CHILD | SS_LEFT,
+                 margin + offsetX + 10, 520, 60, 20, hwnd, NULL, NULL, NULL);
+    CreateWindow("EDIT", config.delay.c_str(), WS_VISIBLE | WS_CHILD | WS_BORDER,
+                 margin + offsetX + 70, 520, 50, 20, hwnd, (HMENU)ID_DELAY_EDIT, NULL, NULL);
+    CreateWindow("BUTTON", "Set Delay", WS_VISIBLE | WS_CHILD,
+                 margin + offsetX + 120, 520, 80, 20, hwnd, (HMENU)ID_SET_DELAY_BUTTON, NULL, NULL);
+
+
+    // Creating fields to display current values
+    CreateWindow("STATIC", "Actual Voltage: 0.0 V", WS_VISIBLE | WS_CHILD | SS_CENTER,
+                 margin + offsetX + 230, 400, 150, 20, hwnd, (HMENU)ID_VOLTAGE_DISPLAY, NULL, NULL);
+    CreateWindow("STATIC", "Actual Current: 0.0 A", WS_VISIBLE | WS_CHILD | SS_CENTER,
+                 margin + offsetX + 230, 430, 150, 20, hwnd, (HMENU)ID_CURRENT_DISPLAY, NULL, NULL);
+
+    CreateWindow("STATIC", "Max Voltage: 0.0 V", WS_CHILD | WS_VISIBLE | SS_CENTER,
+                margin + offsetX + 230, 470, 150, 20, hwnd, (HMENU)ID_MAX_VOLTAGE_DISPLAY, NULL, NULL);
+
+    CreateWindow("STATIC", "Max Current: 0.0 A", WS_CHILD | WS_VISIBLE | SS_CENTER,
+                margin + offsetX + 230, 510, 150, 20, hwnd, (HMENU)ID_MAX_CURRENT_DISPLAY, NULL, NULL);
+
+
+    CreateWindow("BUTTON", "OUTP ON", WS_VISIBLE | WS_CHILD,
+                 margin + offsetX + 10, 560, 100, 30, hwnd, (HMENU)ID_OUTPUT_ON_BUTTON, NULL, NULL);
+    CreateWindow("BUTTON", "OUTP OFF", WS_VISIBLE | WS_CHILD,
+                 margin + offsetX + 145, 560, 100, 30, hwnd, (HMENU)ID_OUTPUT_OFF_BUTTON, NULL, NULL);
+    CreateWindow("BUTTON", "SYST:REM", WS_VISIBLE | WS_CHILD,
+                 margin + offsetX + 280, 560, 100, 30, hwnd, (HMENU)ID_SYST_REM_BUTTON, NULL, NULL);
 }
-
-
-
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-//#include <windows.h>
-//#include <commctrl.h>
-//#include <iostream>
-//#include <string>
-//#include <cstdio>
-//
-//// Глобальные переменные и дескрипторы
-//HINSTANCE g_hInst;
-//HWND hMainWnd;
-//HWND hComboBoxPort, hComboBoxBaudRate, hComboBoxByteSize, hComboBoxParity, hComboBoxStopBits;
-//HWND hButtonConnect, hLED;
-//HWND hStaticVoltage, hStaticCurrent, hStaticMaxVoltage, hStaticMaxCurrent;
-//HWND hEditVoltage, hEditCurrent, hEditRiseTime, hEditFallTime, hEditMemoryBank;
-//HWND hButtonSetVoltage, hButtonSetCurrent, hButtonSetRiseTime, hButtonSetFallTime, hButtonSaveSettings;
-//HANDLE hComPort = INVALID_HANDLE_VALUE;
-//double maxVoltage = 0.0, maxCurrent = 0.0;
-//
-//bool OpenCOMPort(const char* portName);
-//bool ConfigureCOMPort(int baudRate, int byteSize, int parity, int stopBits);
-//bool WriteToCOMPort(const char* command);
-//bool ReadFromCOMPort(char* buffer, int bufferSize);
-//bool GetVoltage(double& voltage);
-//bool GetCurrent(double& current);
-//void RegisterMinMaxValues(double voltage, double current);
-//void UpdateDisplay();
-//void PopulateCOMPorts();
-//void PopulateBaudRates();
-//void PopulateByteSizes();
-//void PopulateParities();
-//void PopulateStopBits();
-//void UpdateLED(int status);
-//
-//void SetVoltage();
-//void SetCurrent();
-//void SetRiseTime();
-//void SetFallTime();
-//void SaveSettings();
-//
-//LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
-//
-//int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine, int nCmdShow) {
-//    g_hInst = hInstance;
-//    WNDCLASS wc = {};
-//    wc.lpfnWndProc = WndProc;
-//    wc.hInstance = hInstance;
-//    wc.lpszClassName = "MainWindowClass";
-//
-//    if(!RegisterClass(&wc)) {
-//        MessageBox(NULL, "Failed to register window class", "Error", MB_OK);
-//        return 1;
-//    }
-//
-//    hMainWnd = CreateWindow("MainWindowClass", "Power Supply Control", WS_OVERLAPPEDWINDOW,
-//        CW_USEDEFAULT, CW_USEDEFAULT, 640, 480, NULL, NULL, hInstance, NULL);
-//
-//    if(!hMainWnd) {
-//        MessageBox(NULL, "Failed to create main window", "Error", MB_OK);
-//        return 1;
-//    }
-//
-//    ShowWindow(hMainWnd, nCmdShow);
-//    UpdateWindow(hMainWnd);
-//
-//    MSG msg;
-//    while(GetMessage(&msg, NULL, 0, 0)) {
-//        TranslateMessage(&msg);
-//        DispatchMessage(&msg);
-//    }
-//
-//    return msg.wParam;
-//}
-//
-//LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
-//    switch(msg) {
-//        case WM_CREATE:
-//            hComboBoxPort = CreateWindow("COMBOBOX", "", CBS_DROPDOWN | WS_CHILD | WS_VISIBLE,
-//                50, 50, 150, 100, hwnd, NULL, g_hInst, NULL);
-//            PopulateCOMPorts();
-//
-//            hComboBoxBaudRate = CreateWindow("COMBOBOX", "", CBS_DROPDOWN | WS_CHILD | WS_VISIBLE,
-//                50, 100, 150, 100, hwnd, NULL, g_hInst, NULL);
-//            PopulateBaudRates();
-//
-//            hComboBoxByteSize = CreateWindow("COMBOBOX", "", CBS_DROPDOWN | WS_CHILD | WS_VISIBLE,
-//                50, 150, 150, 100, hwnd, NULL, g_hInst, NULL);
-//            PopulateByteSizes();
-//
-//            hComboBoxParity = CreateWindow("COMBOBOX", "", CBS_DROPDOWN | WS_CHILD | WS_VISIBLE,
-//                50, 200, 150, 100, hwnd, NULL, g_hInst, NULL);
-//            PopulateParities();
-//
-//            hComboBoxStopBits = CreateWindow("COMBOBOX", "", CBS_DROPDOWN | WS_CHILD | WS_VISIBLE,
-//                50, 250, 150, 100, hwnd, NULL, g_hInst, NULL);
-//            PopulateStopBits();
-//
-//            hButtonConnect = CreateWindow("BUTTON", "Connect", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-//                50, 300, 150, 30, hwnd, (HMENU)1, g_hInst, NULL);
-//
-//            hLED = CreateWindow("STATIC", "", WS_CHILD | WS_VISIBLE | SS_CENTER,
-//                220, 300, 30, 30, hwnd, NULL, g_hInst, NULL);
-//
-//            hStaticVoltage = CreateWindow("STATIC", "Voltage: 0.0 V",
-//                WS_CHILD | WS_VISIBLE | SS_CENTER,
-//                250, 50, 150, 20, hwnd, NULL, g_hInst, NULL);
-//
-//            hStaticCurrent = CreateWindow("STATIC", "Current: 0.0 A",
-//                WS_CHILD | WS_VISIBLE | SS_CENTER,
-//                250, 100, 150, 20, hwnd, NULL, g_hInst, NULL);
-//
-//            hStaticMaxVoltage = CreateWindow("STATIC", "Max Voltage: 0.0 V",
-//                WS_CHILD | WS_VISIBLE | SS_CENTER,
-//                250, 150, 150, 20, hwnd, NULL, g_hInst, NULL);
-//
-//            hStaticMaxCurrent = CreateWindow("STATIC", "Max Current: 0.0 A",
-//                WS_CHILD | WS_VISIBLE | SS_CENTER,
-//                250, 200, 150, 20, hwnd, NULL, g_hInst, NULL);
-//
-//            hEditVoltage = CreateWindow("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER,
-//                50, 350, 100, 20, hwnd, NULL, g_hInst, NULL);
-//            hButtonSetVoltage = CreateWindow("BUTTON", "Set Voltage", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-//                160, 350, 100, 20, hwnd, (HMENU)2, g_hInst, NULL);
-//
-//            hEditCurrent = CreateWindow("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER,
-//                50, 380, 100, 20, hwnd, NULL, g_hInst, NULL);
-//            hButtonSetCurrent = CreateWindow("BUTTON", "Set Current", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-//                160, 380, 100, 20, hwnd, (HMENU)3, g_hInst, NULL);
-//
-//            hEditRiseTime = CreateWindow("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER,
-//                50, 410, 100, 20, hwnd, NULL, g_hInst, NULL);
-//            hButtonSetRiseTime = CreateWindow("BUTTON", "Set Rise Time", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-//                160, 410, 100, 20, hwnd, (HMENU)4, g_hInst, NULL);
-//
-//            hEditFallTime = CreateWindow("EDIT", "", WS_CHILD | WS_VISIBLE | WS_BORDER,
-//                50, 440, 100, 20, hwnd, NULL, g_hInst, NULL);
-//            hButtonSetFallTime = CreateWindow("BUTTON", "Set Fall Time", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-//                160, 440, 100, 20, hwnd, (HMENU)5, g_hInst, NULL);
-//
-//            hEditMemoryBank = CreateWindow("COMBOBOX", "", CBS_DROPDOWN | WS_CHILD | WS_VISIBLE,
-//                50, 470, 100, 100, hwnd, NULL, g_hInst, NULL);
-//            for (int i = 1; i <= 9; ++i) {
-//                char buffer[10];
-//                snprintf(buffer, sizeof(buffer), "%d", i);
-//                SendMessage(hEditMemoryBank, CB_ADDSTRING, 0, (LPARAM)buffer);
-//            }
-//            hButtonSaveSettings = CreateWindow("BUTTON", "Save Settings", WS_TABSTOP | WS_VISIBLE | WS_CHILD | BS_DEFPUSHBUTTON,
-//                160, 470, 100, 20, hwnd, (HMENU)6, g_hInst, NULL);
-//
-//            UpdateLED(0); // Нейтральное состояние (серый)
-//            break;
-//
-//        case WM_COMMAND:
-//            if (LOWORD(wParam) == 1) { // Нажата кнопка Connect
-//                char portName[10];
-//                GetWindowText(hComboBoxPort, portName, 10);
-//
-//                // Проверка, был ли выбран COM-порт
-//                if (strlen(portName) == 0) {
-//                    MessageBox(hwnd, "Please select a COM port.", "Error", MB_OK | MB_ICONERROR);
-//                    UpdateLED(2); // Неудача (красный)
-//                    return 0;
-//                }
-//
-//                char baudRateStr[10];
-//                GetWindowText(hComboBoxBaudRate, baudRateStr, 10);
-//                int baudRate = atoi(baudRateStr);
-//
-//                char byteSizeStr[10];
-//                GetWindowText(hComboBoxByteSize, byteSizeStr, 10);
-//                int byteSize = atoi(byteSizeStr);
-//
-//                char parityStr[10];
-//                GetWindowText(hComboBoxParity, parityStr, 10);
-//                int parity;
-//                if (strcmp(parityStr, "NONE") == 0) {
-//                    parity = NOPARITY;
-//                } else if (strcmp(parityStr, "ODD") == 0) {
-//                    parity = ODDPARITY;
-//                } else if (strcmp(parityStr, "EVEN") == 0) {
-//                    parity = EVENPARITY;
-//                } else if (strcmp(parityStr, "MARK") == 0) {
-//                    parity = MARKPARITY;
-//                } else if (strcmp(parityStr, "SPACE") == 0) {
-//                    parity = SPACEPARITY;
-//                } else {
-//                    MessageBox(hwnd, "Invalid parity selected.", "Error", MB_OK | MB_ICONERROR);
-//                    UpdateLED(2); // Неудача (красный)
-//                    return 0;
-//                }
-//
-//                char stopBitsStr[10];
-//                GetWindowText(hComboBoxStopBits, stopBitsStr, 10);
-//                int stopBits = atoi(stopBitsStr);
-//
-//                if (OpenCOMPort(portName) && ConfigureCOMPort(baudRate, byteSize, parity, stopBits)) {
-//                    UpdateLED(1); // Успех (зеленый)
-//                } else {
-//                    UpdateLED(2); // Неудача (красный)
-//                }
-//            } else if (LOWORD(wParam) == 2) { // Нажата кнопка Set Voltage
-//                SetVoltage();
-//            } else if (LOWORD(wParam) == 3) { // Нажата кнопка Set Current
-//                SetCurrent();
-//            } else if (LOWORD(wParam) == 4) { // Нажата кнопка Set Rise Time
-//                SetRiseTime();
-//            } else if (LOWORD(wParam) == 5) { // Нажата кнопка Set Fall Time
-//                SetFallTime();
-//            } else if (LOWORD(wParam) == 6) { // Нажата кнопка Save Settings
-//                SaveSettings();
-//            }
-//            break;
-//
-//        case WM_DESTROY:
-//            PostQuitMessage(0);
-//            break;
-//
-//        default:
-//            return DefWindowProc(hwnd, msg, wParam, lParam);
-//    }
-//
-//    return 0;
-//}
-//
-//bool OpenCOMPort(const char* portName) {
-//    hComPort = CreateFile(portName, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
-//    if (hComPort == INVALID_HANDLE_VALUE) {
-//        std::cerr << "Failed to open COM port" << std::endl;
-//        return false;
-//    }
-//    return true;
-//}
-//
-//bool ConfigureCOMPort(int baudRate, int byteSize, int parity, int stopBits) {
-//    DCB dcb = {};
-//    dcb.DCBlength = sizeof(DCB);
-//
-//    if (!GetCommState(hComPort, &dcb)) {
-//        std::cerr << "Failed to get COM port state" << std::endl;
-//        return false;
-//    }
-//
-//    dcb.BaudRate = baudRate;
-//    dcb.ByteSize = byteSize;
-//    dcb.Parity = parity;
-//    dcb.StopBits = stopBits;
-//
-//    if (!SetCommState(hComPort, &dcb)) {
-//        std::cerr << "Failed to set COM port state" << std::endl;
-//        return false;
-//    }
-//
-//    return true;
-//}
-//
-//bool WriteToCOMPort(const char* command) {
-//    DWORD bytesWritten;
-//    if (!WriteFile(hComPort, command, strlen(command), &bytesWritten, NULL)) {
-//        std::cerr << "Failed to write to COM port" << std::endl;
-//        return false;
-//    }
-//    return true;
-//}
-//
-//bool ReadFromCOMPort(char* buffer, int bufferSize) {
-//    DWORD bytesRead;
-//    if (!ReadFile(hComPort, buffer, bufferSize - 1, &bytesRead, NULL)) {
-//        std::cerr << "Failed to read from COM port" << std::endl;
-//        return false;
-//    }
-//    buffer[bytesRead] = '\0';
-//    return true;
-//}
-//
-//bool GetVoltage(double& voltage) {
-//    if (!WriteToCOMPort("MEAS:VOLT?\n")) {
-//        return false;
-//    }
-//
-//    char buffer[100];
-//    if (!ReadFromCOMPort(buffer, sizeof(buffer))) {
-//        return false;
-//    }
-//
-//    voltage = atof(buffer);
-//    RegisterMinMaxValues(voltage, 0.0);
-//    UpdateDisplay();
-//    return true;
-//}
-//
-//bool GetCurrent(double& current) {
-//    if (!WriteToCOMPort("MEAS:CURR?\n")) {
-//        return false;
-//    }
-//
-//    char buffer[100];
-//    if (!ReadFromCOMPort(buffer, sizeof(buffer))) {
-//        return false;
-//    }
-//
-//    current = atof(buffer);
-//    RegisterMinMaxValues(0.0, current);
-//    UpdateDisplay();
-//    return true;
-//}
-//
-//void RegisterMinMaxValues(double voltage, double current) {
-//    if (voltage > maxVoltage) {
-//        maxVoltage = voltage;
-//    }
-//
-//    if (current > maxCurrent) {
-//        maxCurrent = current;
-//    }
-//
-//    // Обновить GUI с максимальными значениями
-//    UpdateDisplay();
-//}
-//
-//void UpdateDisplay() {
-//    char buffer[50];
-//    snprintf(buffer, sizeof(buffer), "Max Voltage: %.2f V", maxVoltage);
-//    SetWindowText(hStaticMaxVoltage, buffer);
-//    snprintf(buffer, sizeof(buffer), "Max Current: %.2f A", maxCurrent);
-//    SetWindowText(hStaticMaxCurrent, buffer);
-//}
-//
-//void PopulateCOMPorts() {
-//    // Поиск доступных COM портов и заполнение ComboBox
-//    // Например, вы можете использовать CreateFile для проверки доступности портов
-//    for (int i = 1; i <= 256; ++i) {
-//        char portName[10];
-//        snprintf(portName, sizeof(portName), "COM%d", i);
-//
-//        HANDLE hPort = CreateFile(portName, GENERIC_READ | GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
-//        if (hPort != INVALID_HANDLE_VALUE) {
-//            CloseHandle(hPort);
-//            SendMessage(hComboBoxPort, CB_ADDSTRING, 0, (LPARAM)portName);
-//        }
-//    }
-//}
-//
-//void PopulateBaudRates() {
-//    // Заполнение списка стандартных значений BaudRate
-//    const int baudRates[] = {9600, 19200, 38400, 57600, 115200};
-//    for (int rate : baudRates) {
-//        char buffer[10];
-//        snprintf(buffer, sizeof(buffer), "%d", rate);
-//        SendMessage(hComboBoxBaudRate, CB_ADDSTRING, 0, (LPARAM)buffer);
-//    }
-//}
-//
-//void PopulateByteSizes() {
-//    // Заполнение списка стандартных значений ByteSize
-//    const int byteSizes[] = {5, 6, 7, 8};
-//    for (int size : byteSizes) {
-//        char buffer[10];
-//        snprintf(buffer, sizeof(buffer), "%d", size);
-//        SendMessage(hComboBoxByteSize, CB_ADDSTRING, 0, (LPARAM)buffer);
-//    }
-//}
-//
-//void PopulateParities() {
-//    // Заполнение списка стандартных значений Parity
-//    const char* parities[] = {"NONE", "ODD", "EVEN", "MARK", "SPACE"};
-//    for (const char* parity : parities) {
-//        SendMessage(hComboBoxParity, CB_ADDSTRING, 0, (LPARAM)parity);
-//    }
-//}
-//
-//void PopulateStopBits() {
-//    // Заполнение списка стандартных значений StopBits
-//    const int stopBits[] = {1, 2};
-//    for (int bits : stopBits) {
-//        char buffer[10];
-//        snprintf(buffer, sizeof(buffer), "%d", bits);
-//        SendMessage(hComboBoxStopBits, CB_ADDSTRING, 0, (LPARAM)buffer);
-//    }
-//}
-//
-//void UpdateLED(int status) {
-//    // Изменение цвета LED
-//    HBRUSH hBrush;
-//    switch (status) {
-//        case 0: // Нейтральное состояние (серый)
-//            hBrush = CreateSolidBrush(RGB(192, 192, 192));
-//            break;
-//        case 1: // Успех (зеленый)
-//            hBrush = CreateSolidBrush(RGB(0, 255, 0));
-//            break;
-//        case 2: // Неудача (красный)
-//            hBrush = CreateSolidBrush(RGB(255, 0, 0));
-//            break;
-//        default:
-//            return;
-//    }
-//    HDC hdc = GetDC(hLED);
-//    FillRect(hdc, &RECT{0, 0, 30, 30}, hBrush);
-//    ReleaseDC(hLED, hdc);
-//    DeleteObject(hBrush);
-//}
-//
-//void SetVoltage() {
-//    char buffer[20];
-//    GetWindowText(hEditVoltage, buffer, sizeof(buffer));
-//    double voltage = atof(buffer);
-//    char command[50];
-//    snprintf(command, sizeof(command), "VOLT %.2f\n", voltage);
-//    if (WriteToCOMPort(command)) {
-//        std::cout << "Voltage set to " << voltage << " V" << std::endl;
-//    }
-//}
-//
-//void SetCurrent() {
-//    char buffer[20];
-//    GetWindowText(hEditCurrent, buffer, sizeof(buffer));
-//    double current = atof(buffer);
-//    char command[50];
-//    snprintf(command, sizeof(command), "CURR %.2f\n", current);
-//    if (WriteToCOMPort(command)) {
-//        std::cout << "Current set to " << current << " A" << std::endl;
-//    }
-//}
-//
-//void SetRiseTime() {
-//    char buffer[20];
-//    GetWindowText(hEditRiseTime, buffer, sizeof(buffer));
-//    int riseTime = atoi(buffer);
-//    char command[50];
-//    snprintf(command, sizeof(command), "RISET %d\n", riseTime);
-//    if (WriteToCOMPort(command)) {
-//        std::cout << "Rise time set to " << riseTime << " ms" << std::endl;
-//    }
-//}
-//
-//void SetFallTime() {
-//    char buffer[20];
-//    GetWindowText(hEditFallTime, buffer, sizeof(buffer));
-//    int fallTime = atoi(buffer);
-//    char command[50];
-//    snprintf(command, sizeof(command), "FALLT %d\n", fallTime);
-//    if (WriteToCOMPort(command)) {
-//        std::cout << "Fall time set to " << fallTime << " ms" << std::endl;
-//    }
-//}
-//
-//void SaveSettings() {
-//    char buffer[10];
-//    GetWindowText(hEditMemoryBank, buffer, sizeof(buffer));
-//    int memoryBank = atoi(buffer);
-//    char command[50];
-//    snprintf(command, sizeof(command), "SAV %d\n", memoryBank);
-//    if (WriteToCOMPort(command)) {
-//        std::cout << "Settings saved to memory bank " << memoryBank << std::endl;
-//    }
-//}
-
 
